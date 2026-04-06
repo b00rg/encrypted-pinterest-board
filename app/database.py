@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, LargeBinary, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy import or_
 
 DATABASE_URL = "sqlite:///bookshelf.db"
 
@@ -86,11 +87,28 @@ class ShelfBook(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     shelf_id = Column(Integer, nullable=False)
     work_id_enc = Column(Text, nullable=False)
+    work_id_hash = Column(String(64), nullable=True)  # SHA-256 of plaintext work_id for cross-shelf lookup
     added_by = Column(String(64), nullable=False)
     created_at = Column(DateTime, default=datetime.now)
 
     def __repr__(self):
         return f"<ShelfBook shelf_id={self.shelf_id} added_by={self.added_by}>"
+
+
+class ShelfAccessRequest(Base):
+    """Pending join requests (user-initiated) or invitations (owner-initiated)."""
+    __tablename__ = "shelf_access_requests"
+    __table_args__ = (UniqueConstraint("shelf_id", "target_username"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    shelf_id = Column(Integer, nullable=False)
+    target_username = Column(String(64), nullable=False)
+    request_type = Column(String(16), nullable=False)  # 'invite' | 'request'
+    wrapped_key = Column(LargeBinary, nullable=True)   # pre-wrapped for invites
+    created_at = Column(DateTime, default=datetime.now)
+
+    def __repr__(self):
+        return f"<ShelfAccessRequest shelf_id={self.shelf_id} target={self.target_username} type={self.request_type}>"
 
 
 class Review(Base):
@@ -100,6 +118,7 @@ class Review(Base):
     shelf_book_id = Column(Integer, nullable=False)
     reviewer_username = Column(String(64), nullable=False)
     review_enc = Column(Text, nullable=False)
+    rating = Column(Integer, nullable=True)  # 1–5 stars
     created_at = Column(DateTime, default=datetime.now)
 
     def __repr__(self):
@@ -108,6 +127,19 @@ class Review(Base):
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # Add work_id_hash column if missing (migration for existing databases)
+    with engine.connect() as conn:
+        from sqlalchemy import text
+        try:
+            conn.execute(text("ALTER TABLE shelf_books ADD COLUMN work_id_hash VARCHAR(64)"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+        try:
+            conn.execute(text("ALTER TABLE reviews ADD COLUMN rating INTEGER"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
 
 
 def create_user(username: str,
@@ -343,9 +375,9 @@ def get_user_shelf_memberships(username: str) -> list[ShelfMembership]:
 
 # --- Shelf Books ---
 
-def add_shelf_book(shelf_id: int, work_id_enc: str, added_by: str) -> ShelfBook:
+def add_shelf_book(shelf_id: int, work_id_enc: str, added_by: str, work_id_hash: str | None = None) -> ShelfBook:
     with SessionLocal() as session:
-        book = ShelfBook(shelf_id=shelf_id, work_id_enc=work_id_enc, added_by=added_by)
+        book = ShelfBook(shelf_id=shelf_id, work_id_enc=work_id_enc, added_by=added_by, work_id_hash=work_id_hash)
         session.add(book)
         session.commit()
         session.refresh(book)
@@ -362,6 +394,14 @@ def get_shelf_books(shelf_id: int) -> list[ShelfBook]:
         return books
 
 
+def get_shelf_books_by_hash(work_id_hash: str) -> list[ShelfBook]:
+    """Return all ShelfBook rows whose work_id_hash matches (across all shelves)."""
+    with SessionLocal() as session:
+        books = session.query(ShelfBook).filter_by(work_id_hash=work_id_hash).all()
+        session.expunge_all()
+        return books
+
+
 def get_shelf_book(book_id: int) -> ShelfBook | None:
     with SessionLocal() as session:
         book = session.query(ShelfBook).filter_by(id=book_id).first()
@@ -370,14 +410,24 @@ def get_shelf_book(book_id: int) -> ShelfBook | None:
         return book
 
 
+def set_shelf_book_hash(book_id: int, work_id_hash: str) -> None:
+    """Lazily backfill work_id_hash for books added before the column existed."""
+    with SessionLocal() as session:
+        book = session.query(ShelfBook).filter_by(id=book_id).first()
+        if book and not book.work_id_hash:
+            book.work_id_hash = work_id_hash
+            session.commit()
+
+
 # --- Reviews ---
 
-def add_review(shelf_book_id: int, reviewer_username: str, review_enc: str) -> Review:
+def add_review(shelf_book_id: int, reviewer_username: str, review_enc: str, rating: int | None = None) -> Review:
     with SessionLocal() as session:
         review = Review(
             shelf_book_id=shelf_book_id,
             reviewer_username=reviewer_username,
             review_enc=review_enc,
+            rating=rating,
         )
         session.add(review)
         session.commit()
@@ -395,6 +445,23 @@ def get_reviews(shelf_book_id: int) -> list[Review]:
         return reviews
 
 
+def delete_shelf(shelf_id: int, owner_username: str) -> bool:
+    with SessionLocal() as session:
+        shelf = session.query(Shelf).filter_by(id=shelf_id, owner_username=owner_username).first()
+        if not shelf:
+            return False
+        book_ids = [b.id for b in session.query(ShelfBook).filter_by(shelf_id=shelf_id).all()]
+        if book_ids:
+            session.query(Review).filter(Review.shelf_book_id.in_(book_ids)).delete(
+                synchronize_session=False
+            )
+        session.query(ShelfBook).filter_by(shelf_id=shelf_id).delete()
+        session.query(ShelfMembership).filter_by(shelf_id=shelf_id).delete()
+        session.delete(shelf)
+        session.commit()
+        return True
+
+
 def delete_shelf_book(book_id: int) -> bool:
     with SessionLocal() as session:
         book = session.query(ShelfBook).filter_by(id=book_id).first()
@@ -404,6 +471,161 @@ def delete_shelf_book(book_id: int) -> bool:
         session.delete(book)
         session.commit()
         return True
+
+
+# --- Shelf Access Requests ---
+
+def create_access_request(
+    shelf_id: int, target_username: str, request_type: str, wrapped_key: bytes | None = None
+) -> "ShelfAccessRequest":
+    with SessionLocal() as session:
+        req = ShelfAccessRequest(
+            shelf_id=shelf_id,
+            target_username=target_username,
+            request_type=request_type,
+            wrapped_key=wrapped_key,
+        )
+        session.add(req)
+        session.commit()
+        session.refresh(req)
+        session.expunge(req)
+        return req
+
+
+def get_access_request(req_id: int) -> "ShelfAccessRequest | None":
+    with SessionLocal() as session:
+        req = session.query(ShelfAccessRequest).filter_by(id=req_id).first()
+        if req:
+            session.expunge(req)
+        return req
+
+
+def has_pending_access(shelf_id: int, target_username: str) -> bool:
+    with SessionLocal() as session:
+        return session.query(ShelfAccessRequest).filter_by(
+            shelf_id=shelf_id, target_username=target_username
+        ).first() is not None
+
+
+def get_shelf_join_requests(shelf_id: int) -> list["ShelfAccessRequest"]:
+    """Join requests (user-initiated) for a shelf."""
+    with SessionLocal() as session:
+        reqs = session.query(ShelfAccessRequest).filter_by(
+            shelf_id=shelf_id, request_type="request"
+        ).order_by(ShelfAccessRequest.created_at.asc()).all()
+        session.expunge_all()
+        return reqs
+
+
+def get_shelf_invitations(shelf_id: int) -> list["ShelfAccessRequest"]:
+    """Invitations (owner-initiated) for a shelf."""
+    with SessionLocal() as session:
+        reqs = session.query(ShelfAccessRequest).filter_by(
+            shelf_id=shelf_id, request_type="invite"
+        ).order_by(ShelfAccessRequest.created_at.asc()).all()
+        session.expunge_all()
+        return reqs
+
+
+def get_user_pending_invitations(username: str) -> list[dict]:
+    """Returns invitations pending for a user, enriched with shelf info."""
+    with SessionLocal() as session:
+        rows = (
+            session.query(ShelfAccessRequest, Shelf)
+            .join(Shelf, ShelfAccessRequest.shelf_id == Shelf.id)
+            .filter(
+                ShelfAccessRequest.target_username == username,
+                ShelfAccessRequest.request_type == "invite",
+            )
+            .order_by(ShelfAccessRequest.created_at.asc())
+            .all()
+        )
+        result = []
+        for req, shelf in rows:
+            result.append({
+                "id": req.id,
+                "shelf_id": req.shelf_id,
+                "shelf_name": shelf.name,
+                "owner_username": shelf.owner_username,
+                "created_at": req.created_at.strftime("%Y-%m-%d") if req.created_at else "",
+            })
+        return result
+
+
+def get_user_pending_requests(username: str) -> list[int]:
+    """Shelf IDs where user has a pending join request."""
+    with SessionLocal() as session:
+        reqs = session.query(ShelfAccessRequest).filter_by(
+            target_username=username, request_type="request"
+        ).all()
+        return [r.shelf_id for r in reqs]
+
+
+def delete_access_request(req_id: int) -> bool:
+    with SessionLocal() as session:
+        req = session.query(ShelfAccessRequest).filter_by(id=req_id).first()
+        if not req:
+            return False
+        session.delete(req)
+        session.commit()
+        return True
+
+
+def search_shelves(query: str, exclude_username: str) -> list[dict]:
+    """Search shelves by name, excluding ones the user is already a member of."""
+    with SessionLocal() as session:
+        member_shelf_ids = [
+            m.shelf_id for m in
+            session.query(ShelfMembership).filter_by(username=exclude_username).all()
+        ]
+        shelves = (
+            session.query(Shelf)
+            .filter(Shelf.name.ilike(f"%{query}%"))
+            .filter(~Shelf.id.in_(member_shelf_ids) if member_shelf_ids else True)
+            .limit(20)
+            .all()
+        )
+        # Check for any pending access (both join requests and invites)
+        pending_shelf_ids = set(
+            r.shelf_id for r in
+            session.query(ShelfAccessRequest).filter(
+                ShelfAccessRequest.target_username == exclude_username
+            ).all()
+        )
+        result = []
+        for s in shelves:
+            result.append({
+                "id": s.id,
+                "name": s.name,
+                "owner_username": s.owner_username,
+                "has_pending_request": s.id in pending_shelf_ids,
+            })
+        return result
+
+
+def get_user_pending_requests_detailed(username: str) -> list[dict]:
+    """Join requests user has sent, with shelf details."""
+    with SessionLocal() as session:
+        rows = (
+            session.query(ShelfAccessRequest, Shelf)
+            .join(Shelf, ShelfAccessRequest.shelf_id == Shelf.id)
+            .filter(
+                ShelfAccessRequest.target_username == username,
+                ShelfAccessRequest.request_type == "request",
+            )
+            .order_by(ShelfAccessRequest.created_at.asc())
+            .all()
+        )
+        result = []
+        for req, shelf in rows:
+            result.append({
+                "id": req.id,
+                "shelf_id": req.shelf_id,
+                "shelf_name": shelf.name,
+                "owner_username": shelf.owner_username,
+                "created_at": req.created_at.strftime("%Y-%m-%d") if req.created_at else "",
+            })
+        return result
 
 
 def get_all_reviews_with_context() -> list[dict]:

@@ -2,10 +2,10 @@ import { Icons } from '../icons.js';
 import { escHtml, coverUrl, renderCoverImg } from '../utils.js';
 import { state } from '../state.js';
 import { api } from '../api.js';
-import { getReadLater, toggleReadLater, isReadLater } from '../readLater.js';
+import { toggleReadLater, isReadLater } from '../readLater.js';
 import { showToast } from '../toast.js';
-import { loadShelfBooks } from '../data.js';
-import { openBookModal } from './modal.js';
+import { openAddToShelfPopup } from './shelf-popup.js';
+import { openReviewModal } from './shelves-reviews.js';
 // refreshPageBody is imported from app.js.
 // The circular reference is safe: only called inside async functions/event handlers.
 import { refreshPageBody } from '../app.js';
@@ -34,11 +34,17 @@ export function renderSearchResults() {
 function renderSearchCard(book) {
   const url = coverUrl(book.cover_id);
   const saved = isReadLater(book.work_id);
+  const shelves = state.myShelves || [];
   return `
   <div class="book-card" data-work-id="${escHtml(book.work_id)}"
        data-title="${escHtml(book.title)}" data-author="${escHtml(book.author || '')}"
        data-cover="${escHtml(url || '')}" data-year="${escHtml(String(book.year || ''))}">
     ${saved ? `<div class="rl-badge" title="Saved to Read Later">${Icons.bookmarkFill}</div>` : ''}
+    <button class="hover-bookmark-btn ${saved ? 'is-saved' : ''}"
+            data-work-id="${escHtml(book.work_id)}"
+            title="${saved ? 'Remove from Read Later' : 'Save to Read Later'}">
+      ${saved ? Icons.bookmarkFill : Icons.bookmark}
+    </button>
     ${renderCoverImg(url, book.title)}
     <div class="book-info">
       <div class="book-title">${escHtml(book.title)}</div>
@@ -48,9 +54,19 @@ function renderSearchCard(book) {
       </div>
     </div>
     <div class="card-actions">
-      <button class="btn btn-primary btn-sm search-add-btn" data-work-id="${escHtml(book.work_id)}"
+      ${shelves.length > 0 ? `
+      <button class="btn btn-primary btn-sm search-add-shelf-popup-btn"
+        data-work-id="${escHtml(book.work_id)}"
+        data-title="${escHtml(book.title)}"
+        data-author="${escHtml(book.author || '')}"
+        data-cover-id="${escHtml(String(book.cover_id || ''))}"
+        data-year="${escHtml(String(book.year || ''))}">
+        ${Icons.plus} Add to Shelf
+      </button>` : ''}
+      <button class="btn btn-outline btn-sm search-review-btn"
+              data-work-id="${escHtml(book.work_id)}"
               data-title="${escHtml(book.title)}">
-        ${Icons.plus} Add
+        ${Icons.info} Reviews
       </button>
       <button class="btn ${saved ? 'btn-rl-saved' : 'btn-outline'} btn-sm rl-btn"
               data-work-id="${escHtml(book.work_id)}"
@@ -91,37 +107,67 @@ export function bindSearchResultEvents() {
     if (input) input.value = '';
   });
 
-  document.querySelectorAll('.search-add-btn').forEach(btn => {
-    btn.addEventListener('click', async e => {
+  // Reviews button
+  document.querySelectorAll('.search-review-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      openReviewModal({ workId: btn.dataset.workId, title: btn.dataset.title });
+    });
+  });
+
+  // Add to Shelf popup button
+  document.querySelectorAll('.search-add-shelf-popup-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      openAddToShelfPopup({
+        workId:   btn.dataset.workId,
+        title:    btn.dataset.title,
+        author:   btn.dataset.author,
+        coverId:  btn.dataset.coverId,
+        year:     btn.dataset.year,
+      });
+    });
+  });
+
+  // Hover bookmark button (on cover)
+  document.querySelectorAll('.search-section .hover-bookmark-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
       e.stopPropagation();
       const workId = btn.dataset.workId;
-      const title  = btn.dataset.title;
-      const orig   = btn.innerHTML;
-      btn.disabled = true;
-      btn.innerHTML = `<div class="spinner"></div>`;
-
-      const { ok, data } = await api('/shelf/add', {
-        method: 'POST', body: JSON.stringify({ work_id: workId }),
-      });
-      if (ok) {
-        showToast(`"${title}" added to the shelf!`, 'success');
-        btn.innerHTML = `${Icons.check} Added`;
-        btn.classList.remove('btn-primary');
-        btn.classList.add('btn-outline');
-        await loadShelfBooks();
-      } else {
-        showToast(data.error || 'Failed to add book.', 'error');
-        btn.disabled = false;
-        btn.innerHTML = orig;
+      const result = (state.searchResults || []).find(r => r.work_id === workId);
+      const nowSaved = toggleReadLater(workId, result ? {
+        title: result.title, author: result.author, cover_id: result.cover_id, year: result.year,
+      } : null);
+      showToast(nowSaved ? 'Added to Read Later.' : 'Removed from Read Later.', 'success');
+      btn.innerHTML = nowSaved ? Icons.bookmarkFill : Icons.bookmark;
+      btn.classList.toggle('is-saved', nowSaved);
+      btn.title = nowSaved ? 'Remove from Read Later' : 'Save to Read Later';
+      const card = btn.closest('.book-card');
+      const badge = card?.querySelector('.rl-badge');
+      if (nowSaved && !badge) {
+        card.insertAdjacentHTML('afterbegin', `<div class="rl-badge">${Icons.bookmarkFill}</div>`);
+      } else if (!nowSaved && badge) {
+        badge.remove();
+      }
+      // Sync the card-actions rl-btn
+      const rlBtn = card?.querySelector('.rl-btn');
+      if (rlBtn) {
+        rlBtn.innerHTML = nowSaved ? Icons.bookmarkFill : Icons.bookmark;
+        rlBtn.className = `btn ${nowSaved ? 'btn-rl-saved' : 'btn-outline'} btn-sm rl-btn`;
+        rlBtn.title = btn.title;
       }
     });
   });
 
+  // Card-actions rl-btn
   document.querySelectorAll('.search-section .rl-btn').forEach(btn => {
     btn.addEventListener('click', e => {
       e.stopPropagation();
       const workId = btn.dataset.workId;
-      const nowSaved = toggleReadLater(workId);
+      const result = (state.searchResults || []).find(r => r.work_id === workId);
+      const nowSaved = toggleReadLater(workId, result ? {
+        title: result.title, author: result.author, cover_id: result.cover_id, year: result.year,
+      } : null);
       showToast(nowSaved ? 'Added to Read Later.' : 'Removed from Read Later.', 'success');
       btn.innerHTML = nowSaved ? Icons.bookmarkFill : Icons.bookmark;
       btn.className = `btn ${nowSaved ? 'btn-rl-saved' : 'btn-outline'} btn-sm rl-btn`;
@@ -133,17 +179,24 @@ export function bindSearchResultEvents() {
       } else if (!nowSaved && badge) {
         badge.remove();
       }
+      const hoverBtn = card?.querySelector('.hover-bookmark-btn');
+      if (hoverBtn) {
+        hoverBtn.innerHTML = nowSaved ? Icons.bookmarkFill : Icons.bookmark;
+        hoverBtn.classList.toggle('is-saved', nowSaved);
+        hoverBtn.title = btn.title;
+      }
     });
   });
 
   document.querySelectorAll('.search-section .book-card').forEach(card => {
     card.addEventListener('click', e => {
-      if (e.target.closest('.search-add-btn') || e.target.closest('.rl-btn')) return;
-      openBookModal({
-        work_id: card.dataset.workId,
+      if (e.target.closest('.rl-btn') || e.target.closest('.hover-bookmark-btn') ||
+          e.target.closest('.search-add-shelf-popup-btn') ||
+          e.target.closest('.search-review-btn')) return;
+      openAddToShelfPopup({
+        workId:  card.dataset.workId,
         title:   card.dataset.title,
         author:  card.dataset.author,
-        cover:   card.dataset.cover,
         year:    card.dataset.year,
       });
     });

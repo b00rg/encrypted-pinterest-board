@@ -1,3 +1,175 @@
+/* ── Find-a-shelf popup overlay ─────────────────────────────────────── */
+.popup-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 200;
+}
+
+.popup-overlay.hidden { display: none; }
+
+.popup-box {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  width: 100%; max-width: 480px;
+  padding: 24px;
+  max-height: 80vh;
+  display: flex; flex-direction: column;
+  gap: 16px;
+}
+
+.popup-header {
+  display: flex; align-items: center; justify-content: space-between;
+}
+
+.popup-title {
+  display: flex; align-items: center; gap: 8px;
+  font-family: 'Playfair Display', serif;
+  font-size: 1.1rem; font-weight: 600; color: var(--text);
+}
+
+.popup-title svg { width: 16px; height: 16px; }
+
+.popup-close-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 1.4rem; color: var(--text-muted);
+  line-height: 1; padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s, color 0.15s;
+}
+.popup-close-btn:hover { background: rgba(140,119,83,0.1); color: var(--text); }
+
+.popup-search-bar { margin-bottom: 0; }
+
+.popup-hint {
+  font-size: 0.85rem; color: var(--text-muted); text-align: center;
+  padding: 12px 0;
+}
+
+/* ── Admin search bar ────────────────────────────────────────────────── */
+.admin-search-bar {
+  position: relative; margin-bottom: 20px;
+}
+
+.admin-search-icon {
+  position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; color: var(--text-muted); pointer-events: none;
+}
+
+.admin-search-input {
+  width: 100%;
+  padding: 10px 16px 10px 42px;
+  border: 1.5px solid var(--accent-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 0.9rem; font-family: 'Inter', sans-serif;
+  outline: none; transition: var(--transition);
+}
+.admin-search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(140,119,83,0.12);
+}
+
+/* ── Admin shelf select + add row ────────────────────────────────────── */
+.admin-add-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+
+.admin-shelf-select {
+  background: var(--bg-input);
+  border: 1.5px solid var(--accent-light);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.85rem; color: var(--text);
+  outline: none; cursor: pointer;
+  transition: var(--transition);
+}
+.admin-shelf-select:focus { border-color: var(--accent); }
+
+/* ── Nav badge (pending count) ───────────────────────────────────────── */
+.nav-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent); color: #fff;
+  font-size: 0.68rem; font-weight: 700;
+  border-radius: 50px;
+  padding: 1px 6px; margin-left: 2px;
+  vertical-align: middle;
+}
+
+/* ── Pending Access page ─────────────────────────────────────────────── */
+.pending-section-title {
+  display: flex; align-items: center; gap: 8px;
+  font-family: 'Playfair Display', serif;
+  font-size: 1.1rem; font-weight: 600; color: var(--text);
+  margin-bottom: 12px;
+}
+.pending-section-title svg { width: 16px; height: 16px; }
+
+.pending-list {
+  display: flex; flex-direction: column; gap: 10px;
+  margin-bottom: 8px;
+}
+
+.pending-row {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--accent-light);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  box-shadow: var(--shadow-sm);
+}
+
+.pending-info { display: flex; flex-direction: column; gap: 4px; }
+
+.pending-shelf-name {
+  font-weight: 600; font-size: 0.95rem; color: var(--text);
+}
+
+.pending-meta {
+  font-size: 0.78rem; color: var(--text-muted);
+}
+
+.pending-actions {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+
+/* ── Shelf settings gear dropdown ──────────────────────────────────── */
+.shelf-settings-wrap {
+  position: relative;
+}
+
+.shelf-settings-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 180px;
+  background: var(--bg-card);
+  border: 1px solid var(--accent-light);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  z-index: 100;
+  overflow: hidden;
+}
+.shelf-settings-dropdown.hidden { display: none; }
+
+.shelf-settings-item {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 10px 14px;
+  background: none; border: none;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.875rem; color: var(--text);
+  cursor: pointer; text-align: left;
+  transition: background 0.15s;
+}
+.shelf-settings-item svg { width: 13px; height: 13px; flex-shrink: 0; }
+.shelf-settings-item:hover { background: rgba(140,119,83,0.08); }
+.shelf-settings-danger { color: var(--danger, #c0392b); }
+.shelf-settings-danger:hover { background: rgba(192,57,43,0.07); }
+
 /* ── Create shelf form ──────────────────────────────────────────────── */
 .create-shelf-form {
   display: flex; align-items: center; gap: 10px;
@@ -88,4 +260,54 @@
 .add-member-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(140,119,83,0.12);
+}
+
+.members-section-title {
+  font-size: 0.78rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-muted);
+  margin: 16px 0 8px;
+}
+
+/* ── Invitations banner ─────────────────────────────────────────────── */
+.invitations-banner {
+  background: var(--bg-card);
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-sm);
+}
+
+.invitations-banner-title {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 0.9rem; font-weight: 600; color: var(--accent-hover);
+  margin-bottom: 12px;
+}
+
+.invitations-banner-title svg { width: 15px; height: 15px; }
+
+.invitation-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+}
+
+.invitation-row:last-child { margin-bottom: 0; }
+
+.invitation-info {
+  display: flex; align-items: center; gap: 10px;
+}
+
+.invitation-shelf {
+  font-weight: 600; font-size: 0.9rem; color: var(--text);
+}
+
+.invitation-from {
+  font-size: 0.78rem; color: var(--text-muted);
+}
+
+.invitation-actions {
+  display: flex; gap: 6px; flex-shrink: 0;
 }

@@ -9,8 +9,15 @@ import { loadAdminUsers } from '../data.js';
 import { refreshPageBody, switchToShelf } from '../app.js';
 
 export function renderAdminPage() {
-  const users = state.adminUsers;
-  const members = users.filter(u => u.is_member).length;
+  const allUsers = state.adminUsers;
+  const members = allUsers.filter(u => u.is_member).length;
+  const ownedShelves = (state.myShelves || []).filter(s => s.is_owner);
+
+  // Filter users based on search query
+  const q = state.adminSearchQuery || '';
+  const users = q
+    ? allUsers.filter(u => u.username.toLowerCase().includes(q.toLowerCase()))
+    : allUsers;
 
   return `
   <div>
@@ -26,17 +33,24 @@ export function renderAdminPage() {
 
     <div class="admin-stats">
       <div class="stat-card">
-        <div class="stat-value">${users.length}</div>
+        <div class="stat-value">${allUsers.length}</div>
         <div class="stat-label">Total Users</div>
       </div>
       <div class="stat-card">
         <div class="stat-value">${members}</div>
-        <div class="stat-label">Shelf Members</div>
+        <div class="stat-label">Global Shelf Members</div>
       </div>
       <div class="stat-card">
-        <div class="stat-value">${users.length - members}</div>
-        <div class="stat-label">Pending Access</div>
+        <div class="stat-value">${allUsers.length - members}</div>
+        <div class="stat-label">Not Yet Added</div>
       </div>
+    </div>
+
+    <div class="admin-search-bar">
+      ${Icons.search.replace('<svg', '<svg class="admin-search-icon"')}
+      <input type="search" id="admin-search-input" class="admin-search-input"
+        placeholder="Search users by username…" autocomplete="off"
+        value="${escHtml(q)}" />
     </div>
 
     <div class="users-table-wrapper">
@@ -50,14 +64,18 @@ export function renderAdminPage() {
           </tr>
         </thead>
         <tbody>
-          ${users.map(u => renderUserRow(u)).join('')}
+          ${users.length === 0
+            ? `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:24px">
+                 No users match "${escHtml(q)}".
+               </td></tr>`
+            : users.map(u => renderUserRow(u, ownedShelves)).join('')}
         </tbody>
       </table>
     </div>
   </div>`;
 }
 
-function renderUserRow(u) {
+function renderUserRow(u, ownedShelves) {
   const isSelf = u.username === state.user?.username;
   return `
   <tr data-username="${escHtml(u.username)}">
@@ -77,16 +95,21 @@ function renderUserRow(u) {
     </td>
     <td>
       <div class="table-actions">
-        ${!u.is_member
-          ? `<button class="btn btn-outline btn-sm admin-add-btn" data-username="${escHtml(u.username)}">
-               ${Icons.plus} Add to Shelf
-             </button>`
-          : ''}
-        ${u.is_member && !isSelf
-          ? `<button class="btn btn-danger btn-sm admin-remove-btn" data-username="${escHtml(u.username)}">
-               ${Icons.trash} Remove
-             </button>`
-          : ''}
+        ${!u.is_member && !isSelf ? `
+          <div class="admin-add-row">
+            <select class="admin-shelf-select" id="shelf-select-${escHtml(u.username)}" data-username="${escHtml(u.username)}">
+              <option value="global">Global Shelf</option>
+              ${ownedShelves.map(s => `
+                <option value="shelf-${s.id}">${escHtml(s.name)}</option>`).join('')}
+            </select>
+            <button class="btn btn-outline btn-sm admin-add-btn" data-username="${escHtml(u.username)}">
+              ${Icons.plus} Add
+            </button>
+          </div>` : ''}
+        ${u.is_member && !isSelf ? `
+          <button class="btn btn-danger btn-sm admin-remove-btn" data-username="${escHtml(u.username)}">
+            ${Icons.trash} Remove from Global
+          </button>` : ''}
         ${isSelf ? '<span style="color:var(--text-muted);font-size:0.8rem">—</span>' : ''}
       </div>
     </td>
@@ -96,23 +119,51 @@ function renderUserRow(u) {
 export function bindAdminEvents() {
   document.getElementById('back-to-shelf')?.addEventListener('click', () => switchToShelf());
 
+  // Username search filter
+  const searchInput = document.getElementById('admin-search-input');
+  if (searchInput) {
+    let debounce;
+    searchInput.addEventListener('input', e => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        state.adminSearchQuery = e.target.value;
+        refreshPageBody();
+        bindAdminEvents();
+      }, 200);
+    });
+  }
+
   document.querySelectorAll('.admin-add-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const username = btn.dataset.username;
+      const select = document.getElementById(`shelf-select-${username}`);
+      const shelfValue = select?.value || 'global';
+
       btn.disabled = true;
       btn.innerHTML = `<div class="spinner spinner-dark"></div>`;
-      const { ok, data } = await api('/admin/add', {
-        method: 'POST', body: JSON.stringify({ username }),
-      });
+
+      let ok, data;
+      if (shelfValue === 'global') {
+        ({ ok, data } = await api('/admin/add', {
+          method: 'POST', body: JSON.stringify({ username }),
+        }));
+      } else {
+        const shelfId = shelfValue.replace('shelf-', '');
+        ({ ok, data } = await api(`/shelves/${shelfId}/members`, {
+          method: 'POST', body: JSON.stringify({ username }),
+        }));
+      }
+
       if (ok) {
-        showToast(`${username} added to the shelf.`, 'success');
+        const shelfName = shelfValue === 'global' ? 'global shelf' : select?.options[select.selectedIndex]?.text;
+        showToast(`${username} added to ${shelfName}.`, 'success');
         await loadAdminUsers();
         refreshPageBody();
         bindAdminEvents();
       } else {
         showToast(data.error || 'Failed to add user.', 'error');
         btn.disabled = false;
-        btn.innerHTML = `${Icons.plus} Add to Shelf`;
+        btn.innerHTML = `${Icons.plus} Add`;
       }
     });
   });
@@ -120,7 +171,7 @@ export function bindAdminEvents() {
   document.querySelectorAll('.admin-remove-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const username = btn.dataset.username;
-      if (!confirm(`Remove "${username}" from the shelf? Their access will be revoked and the shelf will be re-keyed.`)) return;
+      if (!confirm(`Remove "${username}" from the global shelf? Their access will be revoked and the shelf will be re-keyed.`)) return;
       btn.disabled = true;
       btn.innerHTML = `<div class="spinner"></div>`;
       const { ok, data } = await api('/admin/remove', {
@@ -134,7 +185,7 @@ export function bindAdminEvents() {
       } else {
         showToast(data.error || 'Failed to remove user.', 'error');
         btn.disabled = false;
-        btn.innerHTML = `${Icons.trash} Remove`;
+        btn.innerHTML = `${Icons.trash} Remove from Global`;
       }
     });
   });

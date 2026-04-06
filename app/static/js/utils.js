@@ -38,10 +38,10 @@ export function renderCoverImg(url, title, extraClass = '') {
 // Colour for books on the original shared shelf (not a group shelf)
 export const SHARED_SHELF_COLOR = '#6b5a45';
 
-export function renderColorCover(title, color, extraClass = '') {
+export function renderColorCover(title, color, extraClass = '', author = '') {
   return `<div class="book-cover-color ${extraClass}" style="background:${escHtml(color)}">
-    <span class="cover-initials">${escHtml(initials(title))}</span>
-    <span class="cover-book-title">${escHtml(String(title || '').slice(0, 50))}</span>
+    <span class="cover-book-title">${escHtml(String(title || '').slice(0, 60))}</span>
+    ${author ? `<span class="cover-book-author">${escHtml(String(author).slice(0, 50))}</span>` : ''}
   </div>`;
 }
 

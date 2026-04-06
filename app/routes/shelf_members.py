@@ -21,15 +21,20 @@ def list_shelf_members(shelf_id: int):
     shelf = get_shelf(shelf_id)
     if not shelf:
         return jsonify({"error": "Shelf not found"}), 404
-    if shelf.owner_username != session["username"]:
-        return jsonify({"error": "Only the shelf owner can view members"}), 403
+
+    # Any shelf member (not just the owner) can view the member list
+    username = session["username"]
+    if shelf.owner_username != username and not _shelf_key(shelf_id):
+        return jsonify({"error": "Not a member of this shelf"}), 403
 
     members = get_shelf_members(shelf_id)
+    is_owner = shelf.owner_username == username
     return jsonify({
         "members": [
             {"username": m.username, "key_version": m.key_version}
             for m in members
-        ]
+        ],
+        "is_owner": is_owner,
     })
 
 

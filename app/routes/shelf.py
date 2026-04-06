@@ -12,7 +12,7 @@ from app.database import (
 from app.key_management import (
     add_member, deserialize_certificate, get_username_from_cert, remove_member,
 )
-from app.openlibrary import get_book, search_books
+from app.openlibrary import get_book, get_books_batch, search_books
 from .helpers import _aes_key, _auth_required
 
 
@@ -24,16 +24,30 @@ def shelf():
 
     aes_key = _aes_key()
     books = []
+    work_ids = []
     for b in get_all_books():
         work_id = None
         if aes_key and is_encrypted(b.work_id_enc):
             work_id = decrypt_message(b.work_id_enc, aes_key)
-        books.append({
+        entry = {
             "id": b.id,
             "work_id": work_id,
             "added_by": b.added_by,
             "created_at": b.created_at.strftime("%Y-%m-%d %H:%M") if b.created_at else "",
-        })
+        }
+        books.append(entry)
+        if work_id:
+            work_ids.append(work_id)
+
+    if work_ids:
+        meta = get_books_batch(work_ids)
+        for entry in books:
+            if entry["work_id"] and entry["work_id"] in meta:
+                m = meta[entry["work_id"]]
+                entry["title"] = m.get("title")
+                entry["author"] = m.get("author")
+                entry["cover_id"] = m.get("cover_id")
+                entry["year"] = m.get("year")
 
     return jsonify({"books": books, "is_member": aes_key is not None})
 

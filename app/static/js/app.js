@@ -1,17 +1,18 @@
 import { state } from './state.js';
 import { api, setForceLogoutHandler } from './api.js';
 import { showToast } from './toast.js';
-import { loadShelfBooks, loadAdminUsers, loadMyShelves, loadActiveShelfBooks, loadAllBooksReviews } from './data.js';
+import { loadShelfBooks, loadAdminUsers, loadMyShelves, loadActiveShelfBooks, loadAllBooksReviews, loadPendingInvitations, loadPendingRequests } from './data.js';
 import { renderHeader, bindHeaderEvents } from './views/header.js';
 import { renderAuthPage, bindAuthEvents } from './views/auth.js';
 import { renderShelfPage } from './views/shelf.js';
 import { bindShelfEvents } from './views/shelf-events.js';
-import { bindSearchResultEvents } from './views/search.js';
+import { renderSearchResults, bindSearchResultEvents } from './views/search.js';
 import { renderAdminPage, bindAdminEvents } from './views/admin.js';
 import { renderPendingPage } from './views/pending.js';
 import { closeModal } from './views/modal.js';
 import { renderShelvesPage } from './views/shelves.js';
 import { bindShelvesEvents } from './views/shelves-events.js';
+import { renderPendingAccessPage, bindPendingAccessEvents } from './views/pending-access.js';
 
 // ── App Root ──────────────────────────────────────────────────────────
 export function renderApp() {
@@ -27,17 +28,19 @@ export function renderApp() {
     ${renderHeader()}
     <main class="main-content">
       <div class="container" id="page-body">
-        ${state.view === 'shelf'   ? renderShelfPage()   : ''}
-        ${state.view === 'pending' ? renderPendingPage() : ''}
-        ${state.view === 'admin'   ? renderAdminPage()   : ''}
-        ${state.view === 'shelves' ? renderShelvesPage() : ''}
+        ${state.view === 'shelf'   ? renderShelfPage()         : ''}
+        ${state.view === 'pending' ? renderPendingPage()       : ''}
+        ${state.view === 'admin'   ? renderAdminPage()         : ''}
+        ${state.view === 'shelves' ? (state.searchQuery ? renderSearchResults() : '') + renderShelvesPage() : ''}
+        ${state.view === 'access'  ? renderPendingAccessPage() : ''}
       </div>
     </main>`;
 
   bindHeaderEvents();
-  if (state.view === 'shelf')   bindShelfEvents();
+  if (state.view === 'shelf')   { bindShelfEvents(); if (state.searchQuery) bindSearchResultEvents(); }
   if (state.view === 'admin')   bindAdminEvents();
-  if (state.view === 'shelves') bindShelvesEvents();
+  if (state.view === 'shelves') { bindShelvesEvents(); if (state.searchQuery) bindSearchResultEvents(); }
+  if (state.view === 'access')  bindPendingAccessEvents();
   if (state.view === 'pending') {
     document.getElementById('pending-logout')?.addEventListener('click', doLogout);
   }
@@ -56,8 +59,12 @@ export function refreshPageBody() {
     body.innerHTML = renderAdminPage();
     bindAdminEvents();
   } else if (state.view === 'shelves') {
-    body.innerHTML = renderShelvesPage();
-    bindShelvesEvents();
+    body.innerHTML = (state.searchQuery ? renderSearchResults() : '') + renderShelvesPage();
+    // NOTE: callers of refreshPageBody() are responsible for calling bindShelvesEvents()
+    // to avoid double-binding (which causes toggle buttons to fire twice).
+  } else if (state.view === 'access') {
+    body.innerHTML = renderPendingAccessPage();
+    bindPendingAccessEvents();
   }
 }
 
@@ -79,9 +86,11 @@ export async function switchToMyShelves() {
   state.view = 'shelves';
   state.searchQuery = '';
   state.searchResults = [];
+  state.shelvesTab = 'shelf';
+  state.allShelvesBooks = [];
   renderApp();
 
-  await loadMyShelves();
+  await Promise.all([loadMyShelves(), loadPendingInvitations(), loadPendingRequests()]);
 
   // Auto-select first shelf and load its books
   if (state.myShelves.length > 0) {
@@ -99,10 +108,19 @@ export async function switchToMyShelves() {
 
 export async function switchToAdmin() {
   state.view = 'admin';
+  state.adminSearchQuery = '';
   renderApp();
   await loadAdminUsers();
   refreshPageBody();
   bindAdminEvents();
+}
+
+export async function switchToAccess() {
+  state.view = 'access';
+  renderApp();
+  await Promise.all([loadPendingInvitations(), loadPendingRequests()]);
+  refreshPageBody();
+  bindPendingAccessEvents();
 }
 
 export async function loadInitialView() {
@@ -124,24 +142,7 @@ export async function loadInitialView() {
     state.view = 'pending'; renderApp(); return;
   }
 
-  state.view = 'shelf';
-  state.loadingShelf = true;
-  renderApp();
-
-  const [withDetails] = await Promise.all([
-    Promise.all(
-      (shelfData.books || []).map(async b => {
-        if (!b.work_id) return { ...b, title: '[Encrypted]', author: '', description: '' };
-        const { ok: dok, data: detail } = await api('/shelf/book/' + encodeURIComponent(b.work_id));
-        return dok ? { ...b, ...detail } : { ...b, title: b.work_id, description: '' };
-      })
-    ),
-    loadMyShelves(),
-  ]);
-  state.shelfBooks = withDetails.reverse();
-  state.loadingShelf = false;
-  refreshPageBody();
-  loadAllBooksReviews().then(() => refreshPageBody());
+  await switchToMyShelves();
 }
 
 export async function doLogout() {
@@ -154,6 +155,8 @@ export async function doLogout() {
   state.activeShelfId = null;
   state.activeShelfBooks = [];
   state.readLaterReviews = {};
+  state.pendingInvitations = [];
+  state.pendingRequests = [];
   state.view = 'auth';
   renderApp();
 }
@@ -168,6 +171,8 @@ function forceLogout() {
   state.activeShelfId = null;
   state.activeShelfBooks = [];
   state.readLaterReviews = {};
+  state.pendingInvitations = [];
+  state.pendingRequests = [];
   state.view = 'auth';
   showToast('Your session expired. Please sign in again.', 'error');
   renderApp();
